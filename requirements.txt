@@ -1,0 +1,16 @@
+# Core
+numpy>=1.24,<2            # torch 2.2 wheels (last for Intel Macs) need numpy 1.x
+pandas>=2.0
+scipy>=1.10
+opencv-python-headless>=4.8
+# Models (downloaded from Hugging Face)
+torch>=2.2
+torchvision>=0.17
+ultralytics>=8.4          # YOLO26-based Hockey-Vision weights need a recent Ultralytics
+lap>=0.5.12               # ByteTrack's assignment solver
+huggingface_hub>=0.23
+# App
+streamlit>=1.40
+plotly>=5.20
+# Tests
+pytest>=8

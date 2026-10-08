@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 260" width="1200" height="260" font-family="Inter, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="ice" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaf4ff"/>
+      <stop offset="1" stop-color="#cfe3f7"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="260" rx="22" fill="url(#ice)"/>
+  <!-- rink -->
+  <g transform="translate(700,38)" opacity="0.95">
+    <rect x="0" y="0" width="440" height="187" rx="62" fill="#f7fbff" stroke="#9aa7b4" stroke-width="3"/>
+    <line x1="24" y1="4" x2="24" y2="183" stroke="#d0393e" stroke-width="2"/>
+    <line x1="416" y1="4" x2="416" y2="183" stroke="#d0393e" stroke-width="2"/>
+    <line x1="165" y1="3" x2="165" y2="184" stroke="#2f6fd6" stroke-width="7"/>
+    <line x1="275" y1="3" x2="275" y2="184" stroke="#2f6fd6" stroke-width="7"/>
+    <line x1="220" y1="3" x2="220" y2="184" stroke="#d0393e" stroke-width="7"/>
+    <circle cx="220" cy="93" r="33" fill="none" stroke="#2f6fd6" stroke-width="2"/>
+    <circle cx="68" cy="45" r="33" fill="none" stroke="#d0393e" stroke-width="2"/>
+    <circle cx="68" cy="142" r="33" fill="none" stroke="#d0393e" stroke-width="2"/>
+    <circle cx="372" cy="45" r="33" fill="none" stroke="#d0393e" stroke-width="2"/>
+    <circle cx="372" cy="142" r="33" fill="none" stroke="#d0393e" stroke-width="2"/>
+    <!-- a tracked skater path -->
+    <path d="M 70 160 C 140 150, 170 70, 250 80 S 340 140, 380 100" fill="none" stroke="#2f6fd6" stroke-width="3" stroke-dasharray="7 6"/>
+    <circle cx="380" cy="100" r="10" fill="#2f6fd6" stroke="#fff" stroke-width="3"/>
+    <line x1="380" y1="100" x2="404" y2="88" stroke="#f2a900" stroke-width="4" stroke-linecap="round"/>
+    <rect x="300" y="58" width="74" height="26" rx="6" fill="#0f1b2d"/>
+    <text x="337" y="76" fill="#fff" font-size="15" font-weight="700" text-anchor="middle">22 mph</text>
+    <circle cx="150" cy="120" r="10" fill="#d0393e" stroke="#fff" stroke-width="3"/>
+    <circle cx="250" cy="140" r="10" fill="#d0393e" stroke="#fff" stroke-width="3"/>
+    <circle cx="300" cy="40" r="10" fill="#2f6fd6" stroke="#fff" stroke-width="3"/>
+    <circle cx="395" cy="125" r="4" fill="#0f1b2d"/>
+  </g>
+  <text x="56" y="112" fill="#0f1b2d" font-size="62" font-weight="800" letter-spacing="-1">RinkIQ</text>
+  <text x="58" y="152" fill="#24405f" font-size="23" font-weight="500">Hockey game film → x/y tracking → advanced stats</text>
+  <g font-size="15" font-weight="600">
+    <rect x="58" y="178" width="138" height="32" rx="16" fill="#2f6fd6"/>
+    <text x="127" y="199" fill="#fff" text-anchor="middle">computer vision</text>
+    <rect x="206" y="178" width="128" height="32" rx="16" fill="#0f1b2d"/>
+    <text x="270" y="199" fill="#fff" text-anchor="middle">Hugging Face</text>
+    <rect x="344" y="178" width="110" height="32" rx="16" fill="#d0393e"/>
+    <text x="399" y="199" fill="#fff" text-anchor="middle">Streamlit</text>
+  </g>
+</svg>
