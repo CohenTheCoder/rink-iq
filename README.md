@@ -78,7 +78,7 @@ ice on purpose. Across 5 random seeds:
 <p align="center"><img src="docs/assets/speed.png" width="70%" alt="Speed traces"></p>
 
 The vision side was tested on a real 10-second NHL broadcast clip. Calibrated on 5 landmarks (mean error
-2.9 ft), dot snapping keeps the end-zone faceoff dots within ~1–3 ft of their true spots through a full
+2.9 ft), dot snapping keeps the end-zone faceoff dots within ~1–5 ft of their true spots through a full
 camera pan (without it, drift reached ~40 ft). Run `pytest` for the automated checks.
 
 ---
