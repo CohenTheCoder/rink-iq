@@ -5,6 +5,8 @@ import cv2
 import numpy as np
 import pandas as pd
 
+from . import identity
+
 TEAM_BGR = {"A": (214, 111, 47), "B": (62, 57, 208), "REF": (150, 150, 150), "?": (200, 200, 200)}
 
 
@@ -21,7 +23,7 @@ def annotate(frame: np.ndarray, rows: pd.DataFrame, puck_px: tuple[float, float]
         cv2.rectangle(img, (x1, y1), (x2, y2), color, max(1, int(2 * scale)))
         cx, fy = (x1 + x2) // 2, y2
         cv2.ellipse(img, (cx, fy), (int((x2 - x1) * 0.6), int(6 * scale)), 0, 0, 360, color, max(1, int(2 * scale)))
-        label = names.get(r["track_id"], f"#{int(r['track_id'])}") if names else f"#{int(r['track_id'])}"
+        label = identity.label(r["track_id"], names)
         speed = r.get("speed_mph", np.nan)
         if not np.isnan(speed):
             label += f"  {speed:.0f} mph"

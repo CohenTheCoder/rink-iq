@@ -9,7 +9,7 @@ Everything here is plain pandas/numpy so each stat is easy to audit:
 |---|---|
 | Speed / top speed | glitches dropped → Savitzky–Golay-smoothed position → derivative → mph; top speed = fastest 0.5 s average |
 | Distance skated | sum of smoothed step lengths |
-| Bursts | stretches ≥ 0.3 s with acceleration > 8 ft/s² |
+| Bursts | stretches ≥ 0.3 s with acceleration > 8 ft/s² that gain ≥ 3 mph |
 | High-intensity % | share of time above 15 mph |
 | Skating backwards % | body facing points opposite to travel (needs pose) |
 | Zone time | OZ / NZ / DZ split using the team's attack direction |
@@ -37,6 +37,7 @@ MAX_PUCK_MPH = 110.0
 HIGH_INTENSITY_MPH = 15.0
 BURST_ACCEL = 8.0          # ft/s²
 BURST_MIN_S = 0.3
+BURST_GAIN_MPH = 3.0
 POSSESSION_FT = 6.0
 SHOT_MIN_MPH = 35.0
 OUT_OF_SLOT_FT = 25.0
@@ -305,14 +306,16 @@ def _sustained_top_speed(g: pd.DataFrame, seconds: float = 0.5) -> float:
 
 
 def _bursts(g: pd.DataFrame) -> int:
+    """Hard accelerations: ≥ 0.3 s above 8 ft/s² that actually gain ≥ 3 mph (jitter alone doesn't count)."""
     hot = (g["accel"] > BURST_ACCEL).to_numpy()
-    t = g["t"].to_numpy()
+    t, v = g["t"].to_numpy(), g["speed_mph"].to_numpy()
     n, start = 0, None
     for i, h in enumerate(hot):
         if h and start is None:
-            start = t[i]
+            start = i
         if (not h or i == len(hot) - 1) and start is not None:
-            if t[i] - start >= BURST_MIN_S:
+            end = i if h else i - 1
+            if t[end] - t[start] >= BURST_MIN_S and np.nan_to_num(v[end] - v[start]) >= BURST_GAIN_MPH:
                 n += 1
             start = None
     return n

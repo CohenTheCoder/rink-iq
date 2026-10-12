@@ -20,8 +20,9 @@ from matplotlib.patches import Circle, FancyBboxPatch  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from rinkiq import metrics, models, pipeline, simulate  # noqa: E402
+from rinkiq import identity, metrics, models, pipeline, simulate  # noqa: E402
 from rinkiq.draw import annotate  # noqa: E402
+from rinkiq.render import render_broadcast, render_rink_replay  # noqa: E402
 from rinkiq.rink import Calibration  # noqa: E402
 
 ASSETS = ROOT / "docs" / "assets"
@@ -72,9 +73,40 @@ def rink_snapshot(ax, res, t, names=None, title=None):
         ax.set_title(title, fontsize=10, color=INK, loc="left")
 
 
+def _names(res, meta):
+    """Sample clip = San Jose (team A, dark) vs Montréal (team B), 2025–26 rosters from the NHL API."""
+    try:
+        rosters = {"A": identity.nhl_roster("SJS", "20252026"), "B": identity.nhl_roster("MTL", "20252026")}
+    except Exception:  # offline → numbers only
+        rosters = {}
+    team_of = res["tracks"].drop_duplicates("track_id").set_index("track_id")["team"].to_dict()
+    return identity.assign_names(meta.get("numbers", {}), team_of, rosters)
+
+
+def _gif(mp4: Path, gif: Path, width=640, fps=10, seconds=None):
+    import imageio.v2 as imageio
+
+    cap = cv2.VideoCapture(str(mp4))
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    step = max(1, round(src_fps / fps))
+    frames, i = [], 0
+    while True:
+        ok, f = cap.read()
+        if not ok or (seconds and i > seconds * src_fps):
+            break
+        if i % step == 0:
+            f = cv2.resize(f, (width, int(f.shape[0] * width / f.shape[1])), interpolation=cv2.INTER_AREA)
+            frames.append(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+        i += 1
+    imageio.mimsave(gif, frames, duration=1 / fps, loop=0)
+
+
 def hero():
     if CACHE.exists():
         players, puck, meta = pickle.loads(CACHE.read_bytes())
+        if "frames" not in meta:  # cached by an older version → re-run
+            CACHE.unlink()
+            return hero()
     else:
         clip = str(models.download_sample_clip(CLIP))
         cal = Calibration.from_pairs([((x, y), n) for x, y, n in models.SAMPLE_CALIBRATION[CLIP]])
@@ -83,14 +115,19 @@ def hero():
         CACHE.parent.mkdir(exist_ok=True)
         CACHE.write_bytes(pickle.dumps((players, puck, meta)))
     res = metrics.analyze(players, puck, meta)
+    names = _names(res, meta)
     clip = str(models.download_sample_clip(CLIP))
     tr = res["tracks"]
     fno = int(sorted(tr["frame"].unique())[len(tr["frame"].unique()) // 2])
     rows = tr[tr["frame"] == fno]
-    img = annotate(pipeline.read_frame(clip, fno), rows)
+    img = annotate(pipeline.read_frame(clip, fno), rows, names=names)
+    out = ROOT / "outputs" / "broadcast.mp4"
+    render_broadcast(clip, res, puck, meta, str(out), names, start_s=2.0, end_s=8.0, out_width=960)
+    _gif(out, ASSETS / "broadcast.gif", width=560, fps=8, seconds=5)
+    print("names:", names)
     cv2.imwrite(str(ASSETS / "hero_frame.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 88])
     fig, ax = plt.subplots(figsize=(6, 2.9), dpi=170)
-    rink_snapshot(ax, res, float(rows["t"].iloc[0]), {i: f"#{i}" for i in rows["track_id"]})
+    rink_snapshot(ax, res, float(rows["t"].iloc[0]), {i: identity.label(i, names) for i in rows["track_id"]})
     fig.tight_layout()
     fig.savefig(ASSETS / "hero_rink.png", transparent=False, facecolor="white")
     plt.close(fig)
@@ -101,6 +138,20 @@ def demo_figures():
     players, puck, meta = simulate.simulate_game()
     res = metrics.analyze(players, puck, meta)
     names = meta["names"]
+    out = ROOT / "outputs" / "replay.mp4"
+    out.parent.mkdir(exist_ok=True)
+    render_rink_replay(res, meta, str(out), names)
+    import imageio.v2 as imageio  # 8–12 s: zone entry → one-timer → rebound
+
+    cap, frames, i = cv2.VideoCapture(str(out)), [], 0
+    while True:
+        ok, f = cap.read()
+        if not ok:
+            break
+        if 240 <= i <= 360 and i % 3 == 0:
+            frames.append(cv2.cvtColor(cv2.resize(f, (720, 338), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2RGB))
+        i += 1
+    imageio.mimsave(ASSETS / "replay.gif", frames, duration=0.1, loop=0)
     s = res["summary"]
     s = s[s["team"].isin(["A", "B"]) & ~s["label"].str.startswith("goalie")]
 

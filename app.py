@@ -11,9 +11,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from rinkiq import metrics, models, pipeline, simulate
+from learn import learn_tab
+from rinkiq import identity, metrics, models, pipeline, simulate
 from rinkiq.camera import shots
 from rinkiq.draw import annotate
+from rinkiq.render import live_preview, render_broadcast, render_rink_replay
+from rinkiq.report import html_report, report_cards, team_comparison
 from rinkiq.rink import LANDMARKS, RINK_LENGTH, RINK_WIDTH, Calibration, rink_layout, suggest_landmarks
 
 st.set_page_config(page_title="RinkIQ · hockey film analytics", page_icon="🏒", layout="wide")
@@ -50,7 +53,49 @@ def set_result(players, puck, meta):
 
 
 def name(tid) -> str:
-    return ss.names.get(tid, f"#{int(tid)}")
+    return identity.label(tid, ss.names)
+
+
+@st.cache_data(show_spinner=False, ttl=24 * 3600)
+def cached_roster(team: str, season: str) -> dict:
+    return identity.nhl_roster(team, season)
+
+
+def roster_panel(meta: dict):
+    """Jersey numbers → names. NHL rosters come from the public NHL API; anything else can be pasted."""
+    nums = meta.get("numbers", {})
+    with st.expander(f"👤 Player names: {len(nums)} jersey number(s) read", expanded=bool(nums)):
+        if not nums:
+            st.caption("No jersey numbers were confirmed. Turn on 'Read jersey numbers' and use more of the "
+                       "video. Numbers need a few clear looks at a player's back or front.")
+            return
+        teams = ["(none)", "Paste a roster"] + [f"{k} · {v}" for k, v in identity.NHL_TEAMS.items()]
+        sample = models.HF_REPO.replace("/", "--") in str(ss.video)  # the bundled clips are SJ (dark) vs MTL
+        default = {"A": "SJS", "B": "MTL"} if sample else {}
+        c1, c2, c3 = st.columns([2, 2, 1])
+        season = c3.text_input("NHL season", "20252026", help="e.g. 20252026 for 2025–26")
+        rosters = {}
+        for col, team in ((c1, "A"), (c2, "B")):
+            idx = next((i for i, t in enumerate(teams) if t.startswith(default.get(team, "~"))), 0)
+            pick = col.selectbox(f"Team {team} {'(dark jerseys in the sample)' if team == 'A' and default else ''}",
+                                 teams, index=idx, key=f"roster_{team}")
+            if pick == "Paste a roster":
+                txt = col.text_area(f"Team {team} roster: one '63 Firstname Lastname' per line", key=f"paste_{team}",
+                                    height=120)
+                rosters[team] = identity.parse_roster(txt)
+            elif pick != "(none)":
+                try:
+                    rosters[team] = cached_roster(pick.split(" · ")[0], season)
+                except Exception as e:  # noqa: BLE001
+                    col.warning(f"Couldn't fetch the roster ({e}).")
+        team_of = ss.result["tracks"].drop_duplicates("track_id").set_index("track_id")["team"].to_dict()
+        ss.names = identity.assign_names({int(k): tuple(v) for k, v in nums.items()}, team_of, rosters)
+        rows = [dict(track=k, team=team_of.get(int(k), "?"), number=v[0], vote_share=v[1], name=ss.names.get(int(k), ""))
+                for k, v in nums.items()]
+        st.dataframe(pd.DataFrame(rows).sort_values(["team", "number"]), hide_index=True, use_container_width=True)
+        if meta.get("merged_tracks"):
+            st.caption(f"Re-identification: {len(meta['merged_tracks'])} broken track piece(s) were joined to their "
+                       "player because they share a team and a jersey number.")
 
 
 def rink_figure(height=420, title=None) -> go.Figure:
@@ -106,15 +151,32 @@ with st.sidebar:
         st.rerun()
 
 st.title("Hockey game-film analytics")
-tab_film, tab_cal, tab_track, tab_stats, tab_review, tab_how = st.tabs(
-    ["① Film", "② Calibrate", "③ Detect & track", "④ Stats", "⑤ Film review", "How it works"])
+tab_film, tab_cal, tab_track, tab_broadcast, tab_stats, tab_review, tab_learn, tab_how = st.tabs(
+    ["① Film", "② Calibrate", "③ Detect & track", "🎬 Broadcast", "④ Stats", "⑤ Film review", "🎓 Learn CV",
+     "How it works"])
 
 # ---------------------------------------------------------------- 1. film
 with tab_film:
     st.markdown("Pick where the film comes from. **No video handy?** The synthetic game runs the whole "
                 "stats layer instantly with known ground truth.")
-    src = st.radio("Source", ["Synthetic demo game (instant)", "Sample NHL broadcast clip", "Upload my own film"],
-                   horizontal=True)
+    src = st.radio("Source", ["Synthetic demo game (instant)", "Pre-analysed NHL clip (instant)",
+                              "Sample NHL broadcast clip", "Upload my own film"], horizontal=True)
+    if src.startswith("Pre-analysed"):
+        st.info("A real 10-second NHL broadcast (San Jose vs Montréal) that has already been through the full "
+                "pipeline: calibration, tracking, pose, jersey numbers. Loads instantly. Then open "
+                "**🎬 Broadcast**, **④ Stats** or **⑤ Film review**. To watch the models run live, pick "
+                "*Sample NHL broadcast clip* instead.")
+        if st.button("▶ Load pre-analysed clip", type="primary"):
+            with st.spinner("Downloading the clip from Hugging Face…"):
+                ss.video = str(models.download_sample_clip(list(models.SAMPLE_CLIPS)[0]))
+            ss.info = pipeline.video_info(ss.video)
+            first = list(models.SAMPLE_CALIBRATION)[0]
+            ss.cal = Calibration.from_pairs([((x, y), n) for x, y, n in models.SAMPLE_CALIBRATION[first]])
+            ss.cal.reference_frame = 0
+            ss.source, ss.names, ss.render_path = "video", {}, None
+            set_result(*pipeline.load_saved_run(Path(__file__).with_name("samples") / "sample_run"))
+            ss.run_msg = "Pre-analysed clip loaded: add the rosters below (pre-filled for SJ vs MTL)."
+            st.rerun()
     if src.startswith("Synthetic"):
         st.info("A 20-second scripted sequence: breakout → zone entry → point shot → counter-attack. "
                 "Team B's left winger deliberately cheats up ice — watch the analytics catch it.")
@@ -123,7 +185,10 @@ with tab_film:
             set_result(*simulate.simulate_game())
             st.rerun()
     if ss.source == "demo":
-        st.success("Demo game loaded — open **④ Stats** and **⑤ Film review**.")
+        st.success("Demo game loaded: open **🎬 Broadcast**, **④ Stats** and **⑤ Film review**.")
+    elif src.startswith("Pre-analysed") or src.startswith("Synthetic"):
+        if ss.result is not None and ss.source == "video":
+            st.success("Loaded. Open **③ Detect & track** for player names, then **🎬 Broadcast** or **④ Stats**.")
     else:
         if src.startswith("Sample"):
             clip_name = st.selectbox("Clip", list(models.SAMPLE_CLIPS))
@@ -249,41 +314,88 @@ with tab_cal:
 # ---------------------------------------------------------------- 3. detect & track
 with tab_track:
     if ss.source == "demo":
-        st.info("The demo game skips detection (the tracks are simulated). See ④ Stats.")
+        st.info("The demo game skips detection (the tracks are simulated). See ④ Stats and 🎬 Broadcast.")
     elif not ss.video:
         st.info("Load a film in ① first.")
     else:
         dur = ss.info["n_frames"] / ss.info["fps"]
-        c1, c2, c3 = st.columns(3)
-        seconds = c1.slider("Seconds to analyse", 1.0, float(max(1.0, dur)), float(min(dur, 10.0)), 0.5)
-        speed = c2.select_slider("Speed vs. detail", ["Fast", "Balanced", "Detailed"], value="Balanced",
-                                 help="Fast analyses ~15 fps without pose; Detailed analyses ~30 fps with pose "
-                                      "on every other frame.")
-        use_pose = c3.toggle("Body orientation (pose model)", value=speed != "Fast")
-        target_fps = {"Fast": 15, "Balanced": 30, "Detailed": 30}[speed]
-        cfg = pipeline.RunConfig(frame_stride=max(1, round(ss.info["fps"] / target_fps)),
-                                 max_frames=int(seconds * ss.info["fps"]), use_pose=use_pose,
-                                 pose_every={"Fast": 6, "Balanced": 3, "Detailed": 2}[speed])
+        c1, c2 = st.columns([3, 2])
+        t_range = c1.slider("Part of the video to analyse (seconds)", 0.0, float(max(1.0, dur)),
+                            (0.0, float(min(dur, 10.0))), 0.5,
+                            help="Full games work too. Use the 'Long game' preset and leave it running.")
+        speed = c2.select_slider("Speed vs. detail", ["Long game", "Fast", "Balanced", "Detailed"], value="Balanced",
+                                 help="Long game: 10 analysed fps, no pose, about real-time×3 on a laptop. "
+                                      "Detailed: 30 fps with pose on every other frame.")
+        c3, c4, c5 = st.columns(3)
+        use_pose = c3.toggle("Body orientation (pose)", value=speed in ("Balanced", "Detailed"))
+        read_numbers = c4.toggle("Read jersey numbers → names", value=True)
+        save_job = c5.toggle("Save progress to disk (resumable)", value=(t_range[1] - t_range[0]) > 120,
+                             help="Results are written in chunks. If the app or laptop stops, run again to "
+                                  "continue where it left off.")
+        target_fps = {"Long game": 10, "Fast": 15, "Balanced": 30, "Detailed": 30}[speed]
+        stride = max(1, round(ss.info["fps"] / target_fps))
+        ref = getattr(ss.cal, "reference_frame", 0) if ss.cal else 0
+        cfg = pipeline.RunConfig(frame_stride=stride, use_pose=use_pose, read_numbers=read_numbers,
+                                 pose_every={"Long game": 6, "Fast": 6, "Balanced": 3, "Detailed": 2}[speed],
+                                 number_every={"Long game": 10, "Fast": 8, "Balanced": 8, "Detailed": 4}[speed],
+                                 start_s=max(t_range[0], ref / ss.info["fps"]), end_s=t_range[1])
+        n_an = int((t_range[1] - t_range[0]) * ss.info["fps"] / stride)
         st.caption(f"Mode: **{'rink feet (calibrated)' if ss.cal else 'speed-only (uncalibrated)'}** · "
-                   f"~{cfg.max_frames // cfg.frame_stride} frames to analyse. On a laptop CPU expect "
-                   f"~0.3–0.8 s per frame.")
+                   f"~{n_an:,} frames to analyse · roughly {n_an * 0.45 / 60:.0f}–{n_an * 0.8 / 60:.0f} min on a "
+                   f"laptop CPU (much faster on a GPU).")
+        job_dir = (UPLOAD_DIR / "jobs" / f"{Path(ss.video).stem}_{int(t_range[0])}_{int(t_range[1])}_{stride}"
+                   if save_job else None)
+        if job_dir is not None and (job_dir / "state.json").exists():
+            st.info("💾 A saved run for this video and range exists. Running again **resumes** it. "
+                    "Delete it to start fresh.")
+            if st.button("Delete saved progress"):
+                import shutil
+
+                shutil.rmtree(job_dir, ignore_errors=True)
+                st.rerun()
         if st.button("▶ Run detection + tracking", type="primary"):
             bar = st.progress(0.0, text="Loading models from Hugging Face…")
-            ref = getattr(ss.cal, "reference_frame", 0) if ss.cal else 0
+            live_box = st.empty()
+            history, counter = {}, {"n": 0}
+
+            def show_live(frame, live):
+                counter["n"] += 1
+                if counter["n"] % 3 == 1:
+                    live_box.image(live_preview(frame, live, history), use_container_width=True,
+                                   caption="Live: what the models see right now (stats are computed at the end)")
+
             players, puck, meta = pipeline.run_video(ss.video, calibration=ss.cal, reference_frame=ref, config=cfg,
-                                                     progress=lambda f, m: bar.progress(f, text=m))
+                                                     progress=lambda f, m: bar.progress(f, text=m),
+                                                     on_frame=show_live, job_dir=job_dir)
             bar.empty()
+            live_box.empty()
             if players.empty:
-                st.error("No players detected — is this hockey film from an elevated camera?")
+                st.error("No players detected. Is this hockey film from an elevated camera?")
             else:
+                ss.names = {}
                 set_result(players, puck, meta)
+                ss.render_path = None
+                skipped = sum(s["status"].startswith("skipped") for s in meta["shots"])
                 ss.run_msg = (f"Tracked {players['track_id'].nunique()} people across "
-                              f"{players['frame'].nunique()} frames · puck seen in {len(puck)} frames. "
-                              f"Open **④ Stats**.")
+                              f"{players['frame'].nunique():,} frames in {len(meta['shots'])} camera shot(s)"
+                              f"{f' ({skipped} skipped: close-ups/replays)' if skipped else ''} · puck seen in "
+                              f"{len(puck):,} frames · {len(meta['numbers'])} jersey number(s) read. "
+                              f"Add rosters below, then open **🎬 Broadcast** or **④ Stats**.")
                 st.rerun()
         if ss.get("run_msg") and ss.result is not None:
             st.success(ss.run_msg)
-        if ss.result is not None and ss.raw[2].get("calibrated") is not None:
+        if ss.result is not None and ss.raw is not None:
+            meta = ss.raw[2]
+            if len(meta.get("shots", [])) > 1:
+                with st.expander(f"🎥 Camera shots ({len(meta['shots'])})"):
+                    sh = pd.DataFrame(meta["shots"]).drop(columns=["H"], errors="ignore")
+                    sh["start_s"] = (sh["start_frame"] / meta["fps"]).round(1)
+                    sh["end_s"] = (sh["end_frame"] / meta["fps"]).round(1)
+                    st.dataframe(sh[["start_s", "end_s", "status"]], hide_index=True, use_container_width=True)
+                    st.caption("After each cut the tracker restarts. Calibrated runs re-locate the new view on the "
+                               "rink by matching it to views already calibrated. Views that don't match "
+                               "(close-ups, replays) are skipped.")
+            roster_panel(meta)
             res = ss.result
             tr = res["tracks"]
             frames = sorted(tr["frame"].unique())
@@ -297,11 +409,44 @@ with tab_track:
                 c1, c2 = st.columns([3, 2])
                 c1.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True,
                          caption="Boxes = team colour · label = live speed · yellow arrow = body facing")
-                if ss.raw[2].get("calibrated"):
+                if meta.get("calibrated"):
                     c2.plotly_chart(snapshot_figure(res, float(rows["t"].iloc[0]) if len(rows) else 0.0),
                                     use_container_width=True)
                 else:
                     c2.info("Calibrate to see the top-down rink view.")
+
+# ---------------------------------------------------------------- 🎬 broadcast
+with tab_broadcast:
+    res = ss.result
+    if res is None:
+        st.info("Load the demo game in ① or run ③ first. Then this tab draws everything back onto the film.")
+    else:
+        meta = ss.raw[2]
+        st.markdown("**The analysis, drawn back onto the film:** team rings under every skater, motion trails "
+                    "glued to the ice, live name/speed tags, body-facing arrows, a glowing puck, SHOT/PASS "
+                    "pop-ups, a gold ring on the fastest skater, and a mini-map.")
+        t_all = float(res["tracks"]["t"].max())
+        if ss.source == "demo":
+            rng = (0.0, t_all)
+        else:
+            rng = st.slider("Clip to render (seconds)", 0.0, max(0.5, t_all), (0.0, min(t_all, 20.0)), 0.5)
+            st.caption("Rendering costs ~0.05–0.1 s per analysed frame. For a full game, render the moments "
+                       "you care about (the shot list is in ④ Stats).")
+        if st.button("🎬 Render video", type="primary"):
+            out = UPLOAD_DIR / f"rinkiq_{'demo' if ss.source == 'demo' else Path(ss.video).stem}_{rng[0]:.0f}_{rng[1]:.0f}.mp4"
+            UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+            bar = st.progress(0.0, "Rendering…")
+            if ss.source == "demo":
+                render_rink_replay(res, meta, str(out), ss.names, progress=lambda f, m: bar.progress(f, m))
+            else:
+                render_broadcast(ss.video, res, ss.raw[1], meta, str(out), ss.names, start_s=rng[0], end_s=rng[1],
+                                 progress=lambda f, m: bar.progress(f, m))
+            bar.empty()
+            ss.render_path = str(out)
+        if ss.get("render_path") and Path(ss.render_path).exists():
+            st.video(ss.render_path)
+            st.download_button("⬇ Download video", Path(ss.render_path).read_bytes(), Path(ss.render_path).name,
+                               mime="video/mp4")
 
 # ---------------------------------------------------------------- 4. stats
 with tab_stats:
@@ -331,6 +476,34 @@ with tab_stats:
             st.caption(f"Ground truth for the demo: shots at {truth['shots']} mph, {truth['passes']} passes, "
                        f"top speeds {min(truth['top_speed_mph'].values()):.1f}–"
                        f"{max(truth['top_speed_mph'].values()):.1f} mph, and {name(truth['cheater'])} cheats.")
+
+        st.subheader("🏅 Who played well, and why")
+        cards = report_cards(res["summary"], res["review"], ss.names)
+        if cards:
+            stars = st.columns(3)
+            for col, c, medal in zip(stars, cards[:3], ["⭐⭐⭐ First star", "⭐⭐ Second star", "⭐ Third star"]):
+                with col.container(border=True):
+                    st.caption(medal)
+                    st.markdown(f"### {c.name} · {c.grade}")
+                    st.caption(f"Team {c.team} · {c.score:.0f}/100 · {c.minutes:.1f} min tracked")
+                    for s_ in c.strengths:
+                        st.markdown(f"✅ {s_}")
+            with st.expander(f"📋 All {len(cards)} report cards + team comparison"):
+                st.dataframe(team_comparison(res["summary"], ev), use_container_width=True)
+                cols = st.columns(3)
+                for i, c in enumerate(cards):
+                    with cols[i % 3].container(border=True):
+                        st.markdown(f"**{c.name}** · Team {c.team} · **{c.grade}** ({c.score:.0f})")
+                        for s_ in c.strengths:
+                            st.markdown(f"✅ {s_}")
+                        for w_ in c.weaknesses:
+                            st.markdown(f"⚠️ {w_}")
+            st.download_button("⬇ Download the game report (HTML)",
+                               html_report(cards, team_comparison(res["summary"], ev)), "rinkiq_report.html",
+                               mime="text/html")
+            st.caption("Grades compare each skater with the others in this video, using percentiles of every stat "
+                       "below (tracks under 2 s are left out). The reasons are the stats that pushed the grade "
+                       "up or down.")
 
         st.subheader("Skater leaderboard")
         st.caption("Skate Score = percentile blend of top speed (25%), avg speed (15%), bursts/min (20%), "
@@ -456,6 +629,10 @@ with tab_review:
             c1.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), use_container_width=True)
         c2.plotly_chart(snapshot_figure(res, float(r["start_s"]), highlight=int(r["track_id"])),
                         use_container_width=True)
+
+# ---------------------------------------------------------------- learn
+with tab_learn:
+    learn_tab()
 
 # ---------------------------------------------------------------- how it works
 with tab_how:

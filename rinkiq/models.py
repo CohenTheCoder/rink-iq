@@ -8,6 +8,7 @@ We don't train anything from scratch. Two pretrained pieces do the "seeing":
     - `new_nano_puck.pt`    → the puck
     - `new_rink_model.pt`   → painted lines (blue / center lines) for calibration
     - `new_dots.pt`         → faceoff dots for calibration
+    - `new_nums.pt`         → jersey digits (→ player names via a roster)
 * **YOLOv8n-pose** (Ultralytics) — 17 body keypoints per person; we use the
   shoulders, hips and nose to estimate which way a player's body is facing.
 
@@ -24,6 +25,7 @@ WEIGHTS = {
     "puck": "new_nano_puck.pt",
     "rink": "new_rink_model.pt",
     "dots": "new_dots.pt",
+    "numbers": "new_nums.pt",
 }
 POSE_WEIGHTS = "yolov8n-pose.pt"  # Ultralytics fetches this on first use
 SAMPLE_CLIPS = {

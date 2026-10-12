@@ -14,3 +14,5 @@ streamlit>=1.40
 plotly>=5.20
 # Tests
 pytest>=8
+imageio-ffmpeg>=0.5        # H.264 output for the broadcast videos (bundles ffmpeg)
+imageio>=2.30              # README GIFs (scripts/make_readme_assets.py)
