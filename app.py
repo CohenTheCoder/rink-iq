@@ -12,12 +12,15 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from learn import learn_tab
+from quick import quick_tab
 from rinkiq import identity, metrics, models, pipeline, simulate
+from rinkiq.autocal import auto_calibrate
 from rinkiq.camera import shots
 from rinkiq.draw import annotate
 from rinkiq.render import live_preview, render_broadcast, render_rink_replay
 from rinkiq.report import html_report, report_cards, team_comparison
-from rinkiq.rink import LANDMARKS, RINK_LENGTH, RINK_WIDTH, Calibration, rink_layout, suggest_landmarks
+from rinkiq.rink import (LANDMARKS, RINK_LENGTH, RINK_WIDTH, Calibration, draw_rink_overlay, rink_layout,
+                         suggest_landmarks)
 
 st.set_page_config(page_title="RinkIQ · hockey film analytics", page_icon="🏒", layout="wide")
 
@@ -151,9 +154,15 @@ with st.sidebar:
         st.rerun()
 
 st.title("Hockey game-film analytics")
-tab_film, tab_cal, tab_track, tab_broadcast, tab_stats, tab_review, tab_learn, tab_how = st.tabs(
-    ["① Film", "② Calibrate", "③ Detect & track", "🎬 Broadcast", "④ Stats", "⑤ Film review", "🎓 Learn CV",
-     "How it works"])
+st.caption("New here? **🚀 Analyze a video** does everything in one click. The numbered tabs are the same pipeline "
+           "step by step, with full control.")
+tab_quick, tab_film, tab_cal, tab_track, tab_broadcast, tab_stats, tab_review, tab_learn, tab_how = st.tabs(
+    ["🚀 Analyze a video", "① Film", "② Calibrate", "③ Detect & track", "🎬 Broadcast", "④ Stats", "⑤ Film review",
+     "🎓 Learn CV", "How it works"])
+
+# ---------------------------------------------------------------- 🚀 one-button flow
+with tab_quick:
+    quick_tab(ss, set_result)
 
 # ---------------------------------------------------------------- 1. film
 with tab_film:
@@ -246,6 +255,17 @@ with tab_cal:
             ss.cal_rows = pd.DataFrame([dict(use=True, px=x, py=y, landmark=n) for x, y, n in preset])
             ss.cal_lines = []
             ss.cal_ver = ss.get("cal_ver", 0) + 1
+        if st.button("🤖 Calibrate automatically (search the video for rink markings)", type="primary"):
+            bar = st.progress(0.0)
+            auto = auto_calibrate(ss.video, max_s=60, progress=lambda f, m: bar.progress(f, m))
+            bar.empty()
+            if auto is None:
+                st.warning("Not enough rink markings found. Use the manual steps below.")
+            else:
+                ss.cal = auto.calibration
+                st.success(f"Found the rink at {auto.frame / ss.info['fps']:.1f}s ({len(auto.marks)} markings + "
+                           f"{len(auto.lines)} lines, fit error {auto.error_ft:.1f} ft). Move the slider to "
+                           f"frame {auto.frame} to see the overlay.")
         if b1.button("🔎 Auto-detect faceoff dots & lines"):
             with st.spinner("Running dots + rink models…"):
                 feat = pipeline.detect_rink_features(frame)
@@ -307,7 +327,10 @@ with tab_cal:
             top = cv2.warpPerspective(frame, T @ ss.cal.H, (int(RINK_LENGTH * S), int(RINK_WIDTH * S)))
             for xl, col in [(75, (214, 111, 47)), (125, (214, 111, 47)), (100, (62, 57, 208))]:
                 cv2.line(top, (xl * S, 0), (xl * S, int(RINK_WIDTH * S)), col, 2)
-            st.image(cv2.cvtColor(top, cv2.COLOR_BGR2RGB), use_container_width=True,
+            c1, c2 = st.columns(2)
+            c1.image(cv2.cvtColor(draw_rink_overlay(frame, ss.cal.H), cv2.COLOR_BGR2RGB), use_container_width=True,
+                     caption="The calibrated rink drawn onto the frame: it should sit on the painted lines.")
+            c2.image(cv2.cvtColor(top, cv2.COLOR_BGR2RGB), use_container_width=True,
                      caption="Top-down check: the frame warped onto the rink. Painted lines should sit on the "
                              "drawn blue/red lines.")
 

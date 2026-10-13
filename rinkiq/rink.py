@@ -26,14 +26,15 @@ BLUE_LINE_RIGHT = 125.0
 CORNER_RADIUS = 28.0
 CIRCLE_RADIUS = 15.0
 DOT_OFFSET_Y = 22.0  # faceoff dots sit 22 ft either side of the long axis
+NEUTRAL_DOT_X = (BLUE_LINE_LEFT + 5.0, BLUE_LINE_RIGHT - 5.0)  # 5 ft inside each blue line → x = 80, 120
 
 # Named points a user (or the auto-suggester) can match to pixels.
 LANDMARKS: dict[str, tuple[float, float]] = {
     "Center ice dot": (CENTER_X, CENTER_Y),
-    "Neutral dot · left · far": (70.0, CENTER_Y + DOT_OFFSET_Y),
-    "Neutral dot · left · near": (70.0, CENTER_Y - DOT_OFFSET_Y),
-    "Neutral dot · right · far": (130.0, CENTER_Y + DOT_OFFSET_Y),
-    "Neutral dot · right · near": (130.0, CENTER_Y - DOT_OFFSET_Y),
+    "Neutral dot · left · far": (NEUTRAL_DOT_X[0], CENTER_Y + DOT_OFFSET_Y),
+    "Neutral dot · left · near": (NEUTRAL_DOT_X[0], CENTER_Y - DOT_OFFSET_Y),
+    "Neutral dot · right · far": (NEUTRAL_DOT_X[1], CENTER_Y + DOT_OFFSET_Y),
+    "Neutral dot · right · near": (NEUTRAL_DOT_X[1], CENTER_Y - DOT_OFFSET_Y),
     "End-zone dot · left · far": (31.0, CENTER_Y + DOT_OFFSET_Y),
     "End-zone dot · left · near": (31.0, CENTER_Y - DOT_OFFSET_Y),
     "End-zone dot · right · far": (169.0, CENTER_Y + DOT_OFFSET_Y),
@@ -210,7 +211,7 @@ def _assign_dot(x: float, y: float, in_circle: bool, y_rank: str | None) -> tupl
     elif abs(x - CENTER_X) < 12:
         return (CENTER_X, CENTER_Y)
     else:
-        dx = 70.0 if left else 130.0
+        dx = NEUTRAL_DOT_X[0] if left else NEUTRAL_DOT_X[1]
     far = (y_rank == "far") if y_rank else y > CENTER_Y
     return (dx, CENTER_Y + DOT_OFFSET_Y if far else CENTER_Y - DOT_OFFSET_Y)
 
@@ -252,10 +253,61 @@ def snap_correction(dots_rink: np.ndarray, in_circle: list[bool], max_snap_ft: f
     if A is None:
         return None
     scale = np.sqrt(abs(np.linalg.det(A[:, :2])))
-    if not 0.7 <= scale <= 1.4:  # implausible jump — ignore this frame's dots
+    angle = np.degrees(np.arctan2(A[1, 0], A[0, 0]))
+    shift = np.linalg.norm(A @ np.array([CENTER_X, CENTER_Y, 1.0]) - [CENTER_X, CENTER_Y])
+    # A drift fix nudges; it never swings the rink around. (Two dots matched to the wrong pair can
+    # "fit" with a 180° turn: the rink looks the same, but every position lands in the wrong end.)
+    if not 0.7 <= scale <= 1.4 or abs(angle) > 15 or shift > 30:
         return None
     return np.vstack([A, [0, 0, 1]])
 
 
 def on_rink(x: np.ndarray, y: np.ndarray, margin: float = 5.0) -> np.ndarray:
     return (x > -margin) & (x < RINK_LENGTH + margin) & (y > -margin) & (y < RINK_WIDTH + margin)
+
+
+def _rink_polylines() -> list[tuple[np.ndarray, tuple[int, int, int], int]]:
+    """The painted rink as polylines in rink feet: (points, BGR colour, thickness)."""
+    red, blue, board = (62, 57, 208), (214, 111, 47), (255, 255, 255)
+    out = []
+    for x, c, t in [(GOAL_LINE_LEFT, red, 2), (GOAL_LINE_RIGHT, red, 2), (BLUE_LINE_LEFT, blue, 4),
+                    (BLUE_LINE_RIGHT, blue, 4), (CENTER_X, red, 4)]:
+        out.append((np.float64([[x, y] for y in np.linspace(1, RINK_WIDTH - 1, 40)]), c, t))
+    th = np.linspace(0, 2 * np.pi, 60)
+    for cx, cy, c in [(31, 20.5, red), (31, 64.5, red), (169, 20.5, red), (169, 64.5, red), (CENTER_X, CENTER_Y, blue)]:
+        out.append((np.stack([cx + CIRCLE_RADIUS * np.cos(th), cy + CIRCLE_RADIUS * np.sin(th)], 1), c, 2))
+    r = CORNER_RADIUS
+    corner = lambda cx, cy, a0: [(cx + r * np.cos(a), cy + r * np.sin(a)) for a in np.linspace(a0, a0 + np.pi / 2, 12)]
+    boards = (corner(RINK_LENGTH - r, RINK_WIDTH - r, 0) + corner(r, RINK_WIDTH - r, np.pi / 2)
+              + corner(r, r, np.pi) + corner(RINK_LENGTH - r, r, 1.5 * np.pi))
+    out.append((np.float64(boards + boards[:1]), board, 2))
+    return out
+
+
+def draw_rink_overlay(frame_bgr: np.ndarray, H: np.ndarray, alpha: float = 0.75) -> np.ndarray:
+    """Draw where the calibration thinks the rink is. If it sits on the painted rink, it's right."""
+    img = frame_bgr.copy()
+    ov = img.copy()
+    Hinv = np.linalg.inv(H)
+    h, w = img.shape[:2]
+    for pts, color, thick in _rink_polylines():
+        px = pixels_to_rink(pts, Hinv)
+        ok = np.all(np.isfinite(px), axis=1) & (np.abs(px[:, 0]) < 4 * w) & (np.abs(px[:, 1]) < 4 * h)
+        seg = []
+        for p, good in zip(px, ok):
+            if good:
+                seg.append(p)
+            elif len(seg) > 1:
+                cv2.polylines(ov, [np.int32(seg)], False, color, thick, cv2.LINE_AA)
+                seg = []
+            else:
+                seg = []
+        if len(seg) > 1:
+            cv2.polylines(ov, [np.int32(seg)], False, color, thick, cv2.LINE_AA)
+    for name, (x, y) in LANDMARKS.items():
+        if "dot" in name:
+            p = pixels_to_rink(np.float64([[x, y]]), Hinv)[0]
+            if np.all(np.isfinite(p)) and 0 <= p[0] < w and 0 <= p[1] < h:
+                cv2.circle(ov, (int(p[0]), int(p[1])), 7, (0, 220, 255), -1, cv2.LINE_AA)
+    cv2.addWeighted(ov, alpha, img, 1 - alpha, 0, img)
+    return img

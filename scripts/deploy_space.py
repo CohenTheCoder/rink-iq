@@ -26,7 +26,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2
 RUN useradd -m -u 1000 user
 USER user
 ENV HOME=/home/user PATH=/home/user/.local/bin:$PATH HF_HOME=/home/user/.cache/huggingface \\
-    YOLO_CONFIG_DIR=/home/user/.config/Ultralytics TRANSFORMERS_NO_TF=1 PYTHONUNBUFFERED=1
+    YOLO_CONFIG_DIR=/home/user/.config/Ultralytics TRANSFORMERS_NO_TF=1 PYTHONUNBUFFERED=1 \\
+    RINKIQ_MAX_SECONDS=60
 WORKDIR /home/user/app
 COPY --chown=user requirements.txt .
 # CPU-only PyTorch keeps the image small (the default wheel bundles ~2 GB of CUDA)

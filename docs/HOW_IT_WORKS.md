@@ -16,8 +16,9 @@ estimates how the camera moved between frames. Every faceoff dot the dots model 
 estimate back onto the real rink (*drift correction*).
 
 **4 · Map to the rink.**
-Four or more landmarks (dots, line/boards intersections) give a homography: a 3×3 matrix that sends any
-pixel on the ice to rink feet. Each player's skates (the bottom-centre of the box) go through it. With no
+A homography is a 3×3 matrix that sends any pixel on the ice to rink feet. RinkIQ finds it **automatically**
+from faceoff dots, circles, goals and painted lines (it tries every consistent matching and keeps the one
+that best explains everything visible), or from ≥ 4 landmarks you click. Each player's skates (the bottom-centre of the box) go through it. With no
 calibration, the box height (≈ 5.5 ft) serves as a ruler, which is enough for speed.
 
 **5 · Body orientation.**

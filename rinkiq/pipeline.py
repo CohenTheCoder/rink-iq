@@ -29,7 +29,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from . import identity, models
+from . import autocal, identity, models
 from .camera import CameraMotion, static_overlay_mask
 from .pose import facing_from_keypoints
 from .rink import Calibration, direction_to_rink, on_rink, pixels_to_rink, snap_correction
@@ -56,11 +56,13 @@ class RunConfig:
     anchor_every: int | None = None  # re-check faceoff dots every Nth analysed frame; None = every ~0.13 s
     read_numbers: bool = True        # read jersey numbers (→ names with a roster)
     number_every: int = 8            # … on every Nth analysed frame
-    start_s: float = 0.0             # analyse only part of the video
+    start_s: float | None = None     # analyse from here (s); None = from the reference frame
     end_s: float | None = None
     keyframe_every: int = 45         # remember a calibrated view every N analysed frames (for re-location)
     reloc_every: int = 15            # while a shot is unplaceable, retry re-location every N frames
     chunk_s: float = 60.0            # with a job_dir: flush results to disk every N seconds of video
+    auto_resolve: bool = True        # read rink markings to place unplaceable shots and to correct drift
+    resolve_every_s: float = 2.0     # … how often, during a calibrated shot
 
 
 def video_info(path: str) -> dict:
@@ -156,8 +158,12 @@ class _Keyframes:
             for lst in (self.pts, self.des, self.H):
                 del lst[0:len(lst) // 2:2]
 
-    def locate(self, kp, des, min_inliers: int = 60) -> np.ndarray | None:
-        """Pixel → rink homography for a new view, by matching it to the best keyframe."""
+    def locate(self, kp, des, min_inliers: int = 60, shape=(720, 1280)) -> np.ndarray | None:
+        """Pixel → rink homography for a new view, by matching it to the best keyframe.
+
+        Repetitive ads and crowds can produce a confident match that flips the picture. A flipped
+        (mirror-image) result is impossible for a real camera, so it's thrown out.
+        """
         if des is None or not self.H:
             return None
         pts = np.float32([k.pt for k in kp])
@@ -170,7 +176,7 @@ class _Keyframes:
             dst = kpts[[x.trainIdx for x in m]].reshape(-1, 1, 2)
             M, inl = cv2.findHomography(src, dst, cv2.RANSAC, 4.0)
             n = int(inl.sum()) if inl is not None else 0
-            if M is not None and n > best_n:
+            if M is not None and n > best_n and _plausible(kH @ M, shape):
                 best, best_n = kH @ M, n
         return best if best_n >= min_inliers else None
 
@@ -184,11 +190,14 @@ class _Keyframes:
 
 
 def _plausible(H: np.ndarray, shape) -> bool:
-    """Does the lower half of the picture (where the ice is) land on or near the rink?"""
+    """Does the lower half of the picture (where the ice is) land on the rink, without mirroring?"""
     h, w = shape[:2]
     pts = pixels_to_rink(np.float32([[w * 0.25, h * 0.7], [w * 0.5, h * 0.6], [w * 0.75, h * 0.7]]), H)
+    near, mid = pixels_to_rink(np.float32([[w * 0.5, h * 0.95], [w * 0.5, h * 0.5]]), H)
     return bool(np.all(np.isfinite(pts)) and np.all((pts[:, 0] > -40) & (pts[:, 0] < 240)
-                                                    & (pts[:, 1] > -40) & (pts[:, 1] < 125)))
+                                                    & (pts[:, 1] > -40) & (pts[:, 1] < 125))
+                and autocal.not_mirrored(H, w, h)
+                and near[1] < mid[1])  # the camera films from the near side: lower in the picture = nearer
 
 
 def _blend_h(H_from: np.ndarray, H_to: np.ndarray, a: float) -> np.ndarray:
@@ -224,6 +233,7 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
     fps = info["fps"]
     stride = cfg.frame_stride or max(1, round(fps / 30))
     anchor_every = cfg.anchor_every or max(1, round(0.13 * fps / stride))
+    resolve_every = max(1, round(cfg.resolve_every_s * fps / stride)) if cfg.resolve_every_s else 0
     ease = 0.8  # how far each dot snap moves toward the real dots (with snaps every ~0.13 s)
     player_model = models.load("player")
     puck_model = models.load("puck")
@@ -231,7 +241,7 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
     names = player_model.names
     job = Path(job_dir) if job_dir else None
 
-    start = int(cfg.start_s * fps) if cfg.start_s else reference_frame
+    start = int(cfg.start_s * fps) if cfg.start_s is not None else reference_frame
     stop = info["n_frames"] if cfg.end_s is None else min(info["n_frames"], int(cfg.end_s * fps))
     if cfg.max_frames:
         stop = min(stop, start + cfg.max_frames)
@@ -262,21 +272,37 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
 
     camera, shot_H, shot = None, None, None
     prev_hist, last_snap, analysed = None, -999, 0
+    used_reference = start >= reference_frame
+
+    def _to_reference(frame):
+        """This frame's pixels → the calibrated reference frame's pixels (identity if it is that frame)."""
+        H_ref, n = probe._match(*probe._features(frame, None), probe.ref_kp, probe.ref_des)
+        return H_ref if H_ref is not None and n >= 40 else np.eye(3)
+    stats = dict(dot_snaps=0, keyframe_fixes=0, marking_fixes=0, marking_tries=0)
     chunk_frames, last_flush = int(cfg.chunk_s * fps), start
 
-    def new_shot(frame, fno):
+    def new_shot(frame, fno, forced_H=None):
         nonlocal camera, shot_H, shot, id_offset
         player_model.predictor = None              # fresh tracker for the new camera shot
         id_offset = max_gid + 1
         camera = None if fixed_camera else CameraMotion(frame, ignore=overlay)
         if calibration is None:
             shot_H, status = None, "pixels"
+        elif forced_H is not None:
+            shot_H, status = forced_H, "auto-calibrated"
         elif fno == reference_frame and not shots_log:
             shot_H, status = calibration.H.copy(), "calibrated"
         else:
             kp, des = (camera or probe)._features(frame, None)
-            shot_H = keyframes.locate(kp, des)
+            # Before the calibrated frame, only a very confident match counts (the saved view may show a
+            # different part of the rink); otherwise we wait for the calibrated frame itself.
+            strict = calibration is not None and fno < reference_frame
+            shot_H = keyframes.locate(kp, des, shape=frame.shape, min_inliers=150 if strict else 60)
             status = "re-located" if shot_H is not None else "skipped (no rink match)"
+            if shot_H is None and cfg.auto_resolve:
+                sol = autocal.solve_frame(frame, fno)  # no saved view matches: read the rink markings directly
+                if sol is not None and sol.n_points >= 5:
+                    shot_H, status = sol.calibration.H, "auto-calibrated"
         shot = dict(start_frame=fno, end_frame=fno, status=status,
                     H=None if shot_H is None else np.asarray(shot_H).round(8).tolist())
         shots_log.append(shot)
@@ -308,7 +334,7 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
         ok, frame = cap.read()
         if not ok:
             break
-        t = (fno - reference_frame) / fps
+        t = fno / fps  # seconds from the start of the video
 
         hist = _histogram(frame)
         cut = prev_hist is not None and cv2.compareHist(prev_hist, hist, cv2.HISTCMP_CORREL) < 0.6
@@ -317,11 +343,18 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
             new_shot(frame, fno)
         shot["end_frame"] = fno
         if shot["status"].startswith("skipped"):
+            if calibration is not None and not used_reference and fno >= reference_frame:
+                used_reference = True  # reached the frame we were calibrated on: start there for sure
+                new_shot(frame, fno, forced_H=calibration.H @ _to_reference(frame))
             # keep trying: a camera often zooms out of a close-up back to the wide view
-            if analysed % cfg.reloc_every == 0:
+            elif analysed % cfg.reloc_every == 0:
                 kp, des = probe._features(frame, None)
-                if keyframes.locate(kp, des) is not None:
+                if keyframes.locate(kp, des, shape=frame.shape) is not None:
                     new_shot(frame, fno)  # found our place again: start a fresh, re-located shot
+                elif cfg.auto_resolve:
+                    sol = autocal.solve_frame(frame, fno)
+                    if sol is not None and sol.n_points >= 5:
+                        new_shot(frame, fno, forced_H=sol.calibration.H)
             if shot["status"].startswith("skipped"):
                 analysed += 1
                 if progress:
@@ -346,11 +379,28 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
                     H = C @ H
                     to_ref = np.linalg.inv(shot_H) @ H
                     camera.prev_to_ref = to_ref  # later frames chain from the corrected view
+                    stats["dot_snaps"] += 1
                     if len(centres) >= 2:
                         last_snap = analysed  # two+ dots pin rotation and scale too: a trustworthy view
+        if (H is not None and camera is not None and cfg.auto_resolve and resolve_every
+                and analysed % resolve_every == resolve_every // 3):
+            # Read the rink markings in this very frame. A confident fit pulls the estimate back (drift fix
+            # that works whenever painted lines are visible, even with no dots and no matching keyframe).
+            sol = autocal.solve_frame(frame, fno, max_error_ft=1.0)
+            stats["marking_tries"] += 1
+            if sol is not None and sol.n_points >= 4 and sol.ice_share > 0.85:
+                corners = np.float32([[0, 0], [frame.shape[1], 0], [frame.shape[1], frame.shape[0]],
+                                      [0, frame.shape[0]]])
+                gap = np.abs(pixels_to_rink(corners[2:], sol.calibration.H) - pixels_to_rink(corners[2:], H)).max()
+                if gap < 40 and _plausible(sol.calibration.H, frame.shape):
+                    H = _blend_h(H, sol.calibration.H, 0.6)
+                    to_ref = np.linalg.inv(shot_H) @ H
+                    camera.prev_to_ref = to_ref
+                    last_snap = analysed
+                    stats["marking_fixes"] += 1
         if H is not None and camera is not None and analysed % cfg.reloc_every == cfg.reloc_every // 2:
             # Drift check without dots: does this view match a calibrated keyframe?
-            found = keyframes.locate(camera.prev_kp, camera.prev_des, min_inliers=80)
+            found = keyframes.locate(camera.prev_kp, camera.prev_des, min_inliers=80, shape=frame.shape)
             if found is not None:
                 corners = np.float32([[0, 0], [frame.shape[1], 0], [frame.shape[1], frame.shape[0]], [0, frame.shape[0]]])
                 gap = np.abs(pixels_to_rink(corners, found) - pixels_to_rink(corners, H)).max()
@@ -358,6 +408,7 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
                     H = found if gap < 1 else _blend_h(H, found, 0.6)
                     to_ref = np.linalg.inv(shot_H) @ H
                     camera.prev_to_ref = to_ref
+                    stats["keyframe_fixes"] += 1
         if H is not None and camera is not None and analysed - last_snap == 0 and analysed % cfg.keyframe_every < anchor_every:
             keyframes.add(camera.prev_kp, camera.prev_des, H)
         frame_rows.append([fno, t, len(shots_log) - 1, *to_ref.ravel().tolist()])
@@ -422,7 +473,7 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
         if job is not None and fno - last_flush >= chunk_frames:
             flush()
         if progress:
-            progress(min(1.0, (fno - start) / max(1, stop - start)), f"{t:,.1f}s / {(stop - reference_frame) / fps:,.1f}s")
+            progress(min(1.0, (fno - start) / max(1, stop - start)), f"{t:,.1f}s / {stop / fps:,.1f}s")
     cap.release()
     player_model.predictor = None  # reset tracker state for the next run
 
@@ -449,7 +500,7 @@ def run_video(path: str, calibration: Calibration | None = None, reference_frame
     meta = dict(fps=fps, frame_stride=stride, calibrated=calibration is not None,
                 units="ft" if calibration is not None else "px", width=info["width"], height=info["height"],
                 shots=shots_log, numbers={int(k): v for k, v in numbers.items()}, merged_tracks=merged,
-                frames=frames, reference_frame=reference_frame)
+                frames=frames, reference_frame=reference_frame, calibration_fixes=stats)
     if calibration is None:
         players, puck = pixels_to_feet(players, puck)
     return players, puck, meta

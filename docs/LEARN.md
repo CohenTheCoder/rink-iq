@@ -108,6 +108,29 @@ pixels_to_rink(np.array([[640, 600]]), cal.H)    # → [[x_ft, y_ft]] on a 200 �
 **grows far away from it**. Small errors are amplified with distance, which is exactly why RinkIQ keeps
 re-anchoring on faceoff dots.
 
+## ⑤b Automatic calibration: finding the rink with no clicking
+🧠 Clicking landmarks is fine for one game but useless for a website where anyone uploads a video. So RinkIQ
+solves it as a **search**:
+1. Find everything painted: faceoff dots (inside a circle → end zone, else neutral zone), the center circle,
+   goal frames, and the **blue / red lines**, fitted as straight lines with a **Hough transform**.
+2. Each marking could be one of a few real positions. Try **every** combination that obeys common sense: left
+   stays left, higher up is further away, nothing on both sides of the center line.
+3. Fit a homography to *points and lines together*. A line gives 2 equations just like a point.
+4. **Judge** each candidate on evidence it *wasn't* fitted to: painted-line boxes, faceoff circles, and whether the
+   projected rink lands on **white ice** in the picture.
+
+⚠️ **Three lessons from real film:**
+* *Exactly enough constraints always fit perfectly.* 3 points + 1 line = 8 equations = 8 unknowns, so the "error" is 0
+  even for a wrong match. Demand a spare constraint before believing a fit.
+* *Symmetry fools you.* A rink looks the same mirrored or turned 180°. A real camera can't film a mirror image
+  (the mapping keeps **handedness**, so its Jacobian determinant has a fixed sign), and it films from the near side.
+  Encoding those physical facts as checks removed every flipped solution.
+* *Check the ground truth itself.* My rink spec had the neutral-zone dots 10 ft out of place. Every downstream
+  number looked plausible until a fit refused to agree with the paint.
+
+🔍 [`rinkiq/autocal.py`](../rinkiq/autocal.py) · `draw_rink_overlay()` in [`rinkiq/rink.py`](../rinkiq/rink.py)
+draws the fitted rink back onto the frame, the fastest way to *see* whether a calibration is right.
+
 ## ⑥ From positions to speed: smoothing noisy data
 🧠 Speed = distance ÷ time. But boxes **jitter** by a few pixels every frame, and at 30 fps a 0.3 ft wobble
 already looks like 9 ft/s of fake speed. So we **smooth** the path first: a **Savitzky–Golay filter**
@@ -183,7 +206,7 @@ the pipeline recovers what we put in:
 | Cheating winger flagged "out of position" | **5 / 5** |
 
 ⚠️ Simulation tests the **math** (tracking cleanup, smoothing, stats). The **vision** side is checked
-separately on a real NHL clip (calibration mean error 2.9 ft). Be clear about which part each test covers.
+separately on a real NHL clip (calibration mean error 0.19 ft). Be clear about which part each test covers.
 
 ---
 
@@ -203,6 +226,8 @@ separately on a real NHL clip (calibration mean error 2.9 ft). Be clear about wh
 | **Ground truth** | the known correct answer you compare against |
 | **Re-identification** | recognising the same person again after they disappear (here: by jersey number) |
 | **Keyframe** | a stored, already-calibrated view used to re-locate the camera after a cut |
+| **Hough transform** | finds straight lines in an image by letting edge pixels vote for line positions |
+| **Handedness** | whether a mapping keeps or flips orientation: a camera keeps it, a mirror flips it |
 
 ## 🧭 Where to go next
 * **OpenCV-Python tutorials**: feature matching, homography and RANSAC, with pictures.

@@ -153,7 +153,7 @@ def learn_tab():
                     "matrix maps every ice pixel to a top-down rink position. Four known points (faceoff dots, "
                     "line/boards corners) are enough to solve it. Try making one point slightly wrong and watch "
                     "the error grow far away from it.")
-        pts = models.SAMPLE_CALIBRATION[CLIP]
+        pts = models.SAMPLE_CALIBRATION[CLIP][:4]  # exactly 4: every point is load-bearing (no spare to out-vote it)
         nudge = st.slider("Mis-click the 'far-left neutral dot' by … pixels", 0, 30, 0, 2)
         pairs = [((x + (nudge if i == 0 else 0), y), n) for i, (x, y, n) in enumerate(pts)]
         cal = Calibration.from_pairs(pairs)
@@ -173,8 +173,9 @@ def learn_tab():
         c2.metric("Error at the far end-zone dot (≈ 40 ft away)", f"{np.linalg.norm(moved - truth):.1f} ft")
         with c2.expander("The matrix itself"):
             st.code(np.array2string(cal.H, precision=4, suppress_small=True))
-        c2.caption("Small clicking errors near the points become big errors far away. That's why RinkIQ "
-                   "keeps re-anchoring on every faceoff dot it sees during a pan.")
+        c2.caption("With exactly 4 points, small clicking errors near them become big errors far away. A spare "
+                   "point lets the fit out-vote a bad click, which is why RinkIQ's automatic calibration insists on "
+                   "one, and keeps re-anchoring on every faceoff dot it sees during a pan.")
 
     elif step == STEPS[5]:
         st.markdown("**From positions to speed.** Speed = distance ÷ time between frames. But detections jitter by "

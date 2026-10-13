@@ -149,6 +149,9 @@ def _hud(img, t, fastest, s, title="RinkIQ", corner="bottom-left"):
 class _Writer:
     def __init__(self, path, size, fps):
         import imageio_ffmpeg
+        from pathlib import Path
+
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
 
         self.gen = imageio_ffmpeg.write_frames(str(path), size, fps=fps, codec="libx264", quality=7,
                                                pix_fmt_in="rgb24", macro_block_size=2,
@@ -193,7 +196,7 @@ def render_broadcast(video_path: str, res: dict, puck_raw: pd.DataFrame, meta: d
     fps = meta["fps"]
     t0 = (start_s or 0) + 0.0
     fr = frames.copy()
-    fr["t"] = (fr["frame"] - meta.get("reference_frame", 0)) / fps
+    fr["t"] = fr["frame"] / fps
     fr = fr[(fr["t"] >= t0) & ((fr["t"] <= end_s) if end_s is not None else True)]
     if fr.empty:
         raise ValueError("No analysed frames in that time range.")
@@ -227,7 +230,7 @@ def render_broadcast(video_path: str, res: dict, puck_raw: pd.DataFrame, meta: d
         shot, M_now = mats[fno]
         M_inv = np.linalg.inv(M_now)
         rows = by_frame.get(fno, pd.DataFrame())
-        t = (fno - meta.get("reference_frame", 0)) / fps
+        t = fno / fps
         # trails (same shot only), mapped into today's pixels
         past = order[max(0, pos_in_order[fno] - TRAIL_FRAMES):pos_in_order[fno] + 1]
         fastest_id, fastest_v = None, 0

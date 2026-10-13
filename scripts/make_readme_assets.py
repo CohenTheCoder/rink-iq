@@ -42,7 +42,7 @@ def draw_rink(ax):
         for cy in (20.5, 64.5):
             ax.add_patch(Circle((cx, cy), 15, fill=False, ec="#d0393e", lw=0.8))
             ax.add_patch(Circle((cx, cy), 1, color="#d0393e"))
-    for cx in (70, 130):
+    for cx in (80, 120):  # neutral-zone dots, 5 ft inside each blue line
         for cy in (20.5, 64.5):
             ax.add_patch(Circle((cx, cy), 1, color="#d0393e"))
     ax.add_patch(Circle((100, 42.5), 15, fill=False, ec="#2f6fd6", lw=0.8))

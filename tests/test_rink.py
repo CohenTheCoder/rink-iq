@@ -18,7 +18,7 @@ def test_homography_round_trip():
 
 def test_dot_snapping_fixes_drift():
     truth = np.array([[31.0, 20.5], [31.0, 64.5]])
-    drifted = truth + np.array([30.0, -8.0])  # 31 ft of drift
+    drifted = truth + np.array([18.0, -6.0])  # ~19 ft of drift
     C = snap_correction(drifted, [True, True])
     fixed = pixels_to_rink(drifted, C)
     assert np.allclose(fixed, truth, atol=0.5)

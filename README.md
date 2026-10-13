@@ -4,10 +4,12 @@
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%E2%80%933.12-2f6fd6">
   <img alt="Models" src="https://img.shields.io/badge/models-Hugging%20Face-0f1b2d">
   <img alt="App" src="https://img.shields.io/badge/app-Streamlit-d0393e">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-15%20passing-2e9e5b">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-18%20passing-2e9e5b">
 </p>
 
-**RinkIQ watches hockey game film and turns it into numbers.** It works out how fast every skater is
+**RinkIQ watches hockey game film and turns it into numbers.** Drop a video into the **🚀 Analyze a video**
+tab and it finds the rink by itself (no clicking), tracks every player, and hands back a broadcast-style
+video, three stars and a report. It works out how fast every skater is
 going, where they are on the ice, which way their body is facing, how hard each shot is, who is out of
 position, *who they are* (jersey number → roster name), and **who played well and why**. Then it draws all
 of it back onto the video like a TV broadcast. It handles full-length games: camera cuts, resumable runs.
@@ -71,7 +73,7 @@ flowchart LR
 | **① Import models** | Download small YOLO detectors trained on NHL broadcasts from [`AlexRHaigh/Hockey-Vision`](https://huggingface.co/AlexRHaigh/Hockey-Vision): players + team, puck, rink lines, faceoff dots. Add `yolov8n-pose` for body keypoints. | [`rinkiq/models.py`](rinkiq/models.py) |
 | **② Detect + track** | Every frame: find every skater, goalie and ref. ByteTrack keeps one ID per person, and the team label is a majority vote over the track. | [`rinkiq/pipeline.py`](rinkiq/pipeline.py) |
 | **③ Undo the camera** | Broadcast cameras pan. ORB feature matching (players and burned-in score graphics masked out) follows the camera. Detected faceoff dots snap the estimate back onto the real rink, which fixes drift. After a **camera cut**, the new view is matched against a bank of already-calibrated keyframes, so it's placed on the rink automatically. | [`rinkiq/camera.py`](rinkiq/camera.py), [`rinkiq/pipeline.py`](rinkiq/pipeline.py) |
-| **④ Pixels → feet** | Match ≥ 4 landmarks (dots, line/boards corners) to an NHL rink. The resulting 3×3 homography maps each player's skates to rink coordinates in feet. | [`rinkiq/rink.py`](rinkiq/rink.py) |
+| **④ Pixels → feet** | **Automatic:** the dots and rink models find faceoff dots, circles, goals and painted lines. Every consistent way of matching them to an NHL rink is fitted (points *and* lines in one homography) and judged on markings it wasn't fitted to, on whether the projected rink lands on white ice, and on rules no real camera breaks. Or click ≥ 4 landmarks by hand. | [`rinkiq/autocal.py`](rinkiq/autocal.py), [`rinkiq/rink.py`](rinkiq/rink.py) |
 | **⑤ Body facing** | Shoulder order (front/back), shoulder width (angle to camera) and nose offset (left/right) give a facing vector, which feeds the *skating backwards* stat. | [`rinkiq/pose.py`](rinkiq/pose.py) |
 | **👤 Who is who** | A digit detector reads jersey numbers on player crops, and each track votes over time. Team + number → name, from the public NHL API or a pasted roster. Broken track pieces with the same number are merged back into one player. | [`rinkiq/identity.py`](rinkiq/identity.py) |
 | **⑥ Stats** | Smoothing, kinematics, possession, passes, shots, goal-side, structure, team shape and a composite *Skate Score*. | [`rinkiq/metrics.py`](rinkiq/metrics.py) |
@@ -95,10 +97,9 @@ in-position 20 % and space 20 %. The weights are in one dict, so you can argue w
 Each skater gets a **report card**: a letter grade plus the stats that earned it, in plain English.
 From the real NHL sample (10 seconds of San Jose vs Montréal):
 
-> **#9 D. Orlov · B+**: ✅ Found open ice: 33 ft of space on the attack (#1 of 9) · ✅ in position 100 % of the time ·
-> ✅ top speed (#2 of 9)
-> **#63 Z. Ostapchuk · B**: ✅ Tight gap control: 6 ft from the nearest attacker (#1 of 9) · ✅ kept moving: 19.8 mph average ·
-> ⚠️ few hard accelerations (2 in 10 s)
+> **#9 D. Orlov · B+**: ✅ Found open ice: 28 ft of space on the attack (#1 of 11) · ✅ explosive: 3 hard
+> accelerations in 5 s (#2 of 11)
+> **#63 Z. Ostapchuk · B+**: ✅ Kept moving: 14.9 mph on average (#2 of 11) · ✅ top speed 24.0 mph (#3 of 11)
 
 The app also picks **three stars**, compares the two teams, and exports everything as a printable HTML report.
 
@@ -126,10 +127,22 @@ The vision side was tested on real NHL broadcast film:
 
 | Check (real film) | Result |
 |---|---|
-| Calibration from 5 clicked landmarks | mean error **2.9 ft** |
-| Rink accuracy through pans: median faceoff-dot error, 3 camera shots / 30 s, at 10 *and* 30 analysed fps | **0.2–0.3 ft** (drift without the fixes: up to ~40 ft) |
-| Camera cuts found / new shots placed on the rink automatically | **2 / 2**, re-located to within **0.1 ft** |
+| Calibration from 5 clicked landmarks | mean error **0.19 ft** |
+| **Automatic calibration** (no clicking) on the 3 sample clips | rink found in **2 / 3** (fit 0.3–0.4 ft, verified by drawing the rink back onto the frame); the third falls back to speed-only |
+| Through a full pan into an end zone, automatic calibration: end-zone dots placed in the right end / position error | **16 / 16**, median **0.4 ft** (p90 5 ft) |
+| Camera cuts found | **2 / 2** |
 | Jersey numbers confirmed in a 10 s clip / matched to the NHL roster | **6 / 4** (e.g. #14 N. Suzuki, #63 Z. Ostapchuk) |
+| Speeds on real film (11 skaters, 10 s) | median top speed **20.9 mph**, median average **12.0 mph**, in line with NHL norms |
+
+#### 🐞 Bugs the real-film tests caught (and what fixed them)
+* **The neutral-zone faceoff dots were 10 ft out of place** (x = 70/130 instead of 80/120: they sit 5 ft *inside*
+  the blue lines). Every real-film position was slightly stretched. Calibration error dropped from 2.9 → 0.19 ft,
+  and the "speeds read 10–15 % high" problem I'd listed here disappeared.
+* **Mirror-image and 180°-rotated rinks.** The rink is symmetric, so a few markings can fit the wrong end just as
+  well. A real camera can't film a mirror image (the mapping must keep handedness), it films from the near
+  side, and a drift fix only ever *nudges*. Those three rules now reject impossible solutions.
+* **A metric that couldn't see the bug.** "Distance to the nearest real dot" scored a mirrored rink as perfect
+  (the dots are symmetric too). The accuracy test now checks which *end* each dot lands in.
 
 Run `pytest` for the automated checks.
 
@@ -146,10 +159,13 @@ streamlit run app.py
 
 Then, in the app:
 
+0. **🚀 Analyze a video**: upload a video (or use the sample), optionally pick the teams, press **Analyze**.
+   It finds the rink, tracks, reads numbers, grades players and renders the video in one go. The steps
+   below do the same thing by hand, with full control.
 1. **① Film** → *Synthetic demo game* or *Pre-analysed NHL clip* for an instant tour, *Sample NHL broadcast
    clip* to watch the models run (live preview), or upload your own. Full games work too.
-2. **② Calibrate** → *Auto-detect faceoff dots* (or *Use hand-checked points* for the sample) → *Solve*. The
-   warped top-down preview shows whether it's right.
+2. **② Calibrate** → **🤖 Calibrate automatically**, or *Auto-detect faceoff dots* / *Use hand-checked points* →
+   *Solve*. The rink drawn back onto the frame (and a top-down warp) show whether it's right.
 3. **③ Detect & track** → *Run* (watch the live preview). Then pick the two teams' rosters under
    **👤 Player names** (NHL teams auto-load, or paste any roster).
 4. **🎬 Broadcast** → *Render video*. **④ Stats** → three stars, report cards, HTML report. **⑤ Film review** →
@@ -176,12 +192,14 @@ pytest                                                      # validation suite
 ```
 rink-iq/
 ├── app.py                    # Streamlit app (the "present" step)
+├── quick.py                  # 🚀 Analyze a video: upload → automatic everything → results
 ├── learn.py                  # 🎓 Learn CV tab: each step with sliders
 ├── rinkiq/
 │   ├── models.py             # ① Hugging Face model loading
 │   ├── pipeline.py           # ② streaming detect → track → map; cuts, re-location, resumable jobs
 │   ├── camera.py             # ③ camera-motion compensation, overlay masking, cut detection
-│   ├── rink.py               # ④ rink geometry, landmarks, homography, dot snapping
+│   ├── rink.py               # ④ rink geometry, landmarks, homography, dot snapping, rink overlay
+│   ├── autocal.py            # ④ automatic calibration: markings + painted lines → homography
 │   ├── pose.py               # ⑤ body orientation from keypoints
 │   ├── identity.py           # 👤 jersey numbers → votes → roster names; track merging
 │   ├── metrics.py            # ⑥ every stat, in readable pandas
@@ -202,19 +220,19 @@ rink-iq/
 
 - **The puck is tiny and often hidden**, so shot speed needs it visible for a few frames. Broadcast film
   gives fewer shot readings than the simulation.
-- **Speeds on broadcast film read high.** Top speeds come out ~25–27 mph, above NHL tracking norms (~23–24
-  mph), so real-film speeds run ~10–15 % high from box jitter and perspective. They're good for comparing
-  players *within* a game, not against league numbers. (On the simulation, where the truth is known, the
-  error is 0.7 mph.)
-- **Calibration** needs one manual set of landmarks per game. After that, pans are tracked and cuts are
-  re-located automatically, but close-ups and replays from unusual angles are skipped (and listed).
+- **Speeds on real film aren't validated against true tracking data.** They now land in NHL norms (median
+  top speed 20.9 mph), but individual readings can still spike. Treat them as within-game comparisons.
+- **Automatic calibration needs enough paint in view**: 3+ dots/circles/goals plus a line, with a spare.
+  Frames before the first identifiable view wait. If it can't find the rink at all, the run falls back to
+  speed-only, and you can calibrate by hand in ② (or click 🤖 Calibrate automatically on another stretch).
+- **Close-ups and replays from unusual angles are skipped** (and listed).
 - **Names need clear looks at numbers** (backs or fronts, not sideways), and the roster must match the season.
 - **Team labels come from jersey colour** and can flip with unusual uniforms.
 - **Facing is a 2-D heuristic.** It's good for "forwards vs. backwards", not for exact angles.
 - "Out of position" is a transparent rule meant to surface clips worth watching, not a coach's verdict.
 
 ## 🛣️ Next ideas
-Fully automatic first calibration from lines + dots · expected-goals model from shot location/speed ·
+Calibrate from the boards' edge too (more frames qualify) · expected-goals model from shot location/speed ·
 line-change and shift detection · calibrating speeds against NHL EDGE data.
 
 ## 🙏 Credits
