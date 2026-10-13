@@ -43,7 +43,7 @@ CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0
 def build(dest: Path) -> None:
     files = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True).stdout.split()
     for f in files:
-        if f.startswith("notebooks/"):  # big executed notebooks aren't needed to run the app
+        if f.startswith(("notebooks/", "web/", "supabase/", "worker/")):  # not needed by the Streamlit Space
             continue
         (dest / f).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / f, dest / f)

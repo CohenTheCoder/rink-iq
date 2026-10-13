@@ -8,3 +8,13 @@ outputs/
 .DS_Store
 .pytest_cache/
 .claude/
+
+# online version
+worker/.env
+web/.env*
+!web/.env.example
+web/node_modules/
+web/.next/
+web/.vercel/
+web/next-env.d.ts
+web/tsconfig.tsbuildinfo
