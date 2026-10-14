@@ -22,6 +22,9 @@ the worker is off and get picked up when it starts.
 | Database + files | Supabase | `jobs` table (the queue), private `videos` and `results` buckets |
 | Worker | `worker/worker.py` | Claims a job, downloads the video, runs `rinkiq.job.run_analysis`, uploads results |
 
+**Already deployed:** the site is live at <https://rinkiq-mocha.vercel.app>. `/demo` is open to everyone, and the rest stays
+locked until you finish step 2 below.
+
 ## Set it up (about 10 minutes)
 
 ### 1 · Create the Supabase project (free)

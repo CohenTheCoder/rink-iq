@@ -7,6 +7,8 @@
   <img alt="Tests" src="https://img.shields.io/badge/tests-18%20passing-2e9e5b">
 </p>
 
+**▶ [Try the live interactive demo](https://rinkiq-mocha.vercel.app/demo)**: click around an analysed game, no install.
+
 **RinkIQ watches hockey game film and turns it into numbers.** Drop a video into the **🚀 Analyze a video**
 tab and it finds the rink by itself (no clicking), tracks every player, and hands back a broadcast-style
 video, three stars and a report. It works out how fast every skater is
@@ -162,7 +164,7 @@ does the heavy computer vision. Full walkthrough: **[`docs/ONLINE.md`](docs/ONLI
 python worker/worker.py
 ```
 
-The site also has a public **`/demo`** page: an animated rink replay of a real analysed NHL clip and of a scripted game
+The site also has a public **[`/demo`](https://rinkiq-mocha.vercel.app/demo)** page: an animated rink replay of a real analysed NHL clip and of a scripted game
 whose answer is known. Click any skater for their speed chart and report card. No upload or setup needed (`cd web && npm install && npm run dev`).
 
 ---
