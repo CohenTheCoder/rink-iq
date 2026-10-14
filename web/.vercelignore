@@ -1,0 +1,6 @@
+# never upload secrets or build output
+.env
+.env.*
+node_modules
+.next
+.vercel

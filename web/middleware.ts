@@ -6,6 +6,9 @@ import { NextResponse, type NextRequest } from "next/server";
  * to the internet by accident.
  */
 export function middleware(req: NextRequest) {
+  // The interactive demo is public by design: it only contains pre-analysed sample data (no video, no uploads).
+  const path = req.nextUrl.pathname;
+  if (path === "/demo" || path.startsWith("/demo/") || path.startsWith("/demo-data/")) return NextResponse.next();
   const password = process.env.RINKIQ_PASSWORD;
   if (!password) {
     if (process.env.NODE_ENV !== "production") return NextResponse.next(); // local dev: open

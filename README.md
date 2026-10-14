@@ -148,6 +148,25 @@ Run `pytest` for the automated checks.
 
 ---
 
+## 🌐 Put it on the web (Vercel + Supabase)
+
+Run RinkIQ as a website: visitors upload a video, a worker analyses it, and the results appear on a live job page.
+Vercel hosts the site, Supabase holds the videos, queue and results, and a small Python worker (your laptop or any server)
+does the heavy computer vision. Full walkthrough: **[`docs/ONLINE.md`](docs/ONLINE.md)**.
+
+```bash
+# 1. create a free Supabase project and run supabase/migrations/001_init.sql in its SQL editor
+# 2. connect everything and deploy the site (asks for your keys, hidden, and never prints them)
+./scripts/setup_online.sh
+# 3. run the worker wherever the RinkIQ Python environment lives
+python worker/worker.py
+```
+
+The site also has a public **`/demo`** page: an animated rink replay of a real analysed NHL clip and of a scripted game
+whose answer is known. Click any skater for their speed chart and report card. No upload or setup needed (`cd web && npm install && npm run dev`).
+
+---
+
 ## 🚀 Run it
 
 ```bash
@@ -193,6 +212,9 @@ pytest                                                      # validation suite
 rink-iq/
 ├── app.py                    # Streamlit app (the "present" step)
 ├── quick.py                  # 🚀 Analyze a video: upload → automatic everything → results
+├── web/                      # 🌐 Next.js site for Vercel: upload, live jobs, results, public /demo
+├── worker/worker.py          # 🌐 queue worker: runs the pipeline on uploaded videos
+├── supabase/migrations/      # 🌐 database schema, job queue, storage buckets
 ├── learn.py                  # 🎓 Learn CV tab: each step with sliders
 ├── rinkiq/
 │   ├── models.py             # ① Hugging Face model loading

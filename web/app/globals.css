@@ -122,3 +122,28 @@ details { margin-top: 12px; } summary { cursor: pointer; font-family: var(--f-di
 .notice.ok { border-left-color: var(--ok); background: rgba(56, 193, 114, 0.08); }
 code { font-family: var(--f-mono), monospace; background: rgba(255, 255, 255, 0.08); padding: 1px 6px; border-radius: 4px; }
 @media (max-width: 560px) { .board { padding: 16px; } .game { grid-template-columns: 1fr; } }
+
+/* interactive demo */
+.demo-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 18px; margin-top: 8px; align-items: start; }
+@media (max-width: 900px) { .demo-grid { grid-template-columns: 1fr; } }
+.demo-canvas { background: #dfe7f1; border-radius: 14px; border: 2px solid var(--line); overflow: hidden; min-height: 120px; }
+.demo-controls { display: flex; align-items: center; gap: 12px; margin-top: 10px; flex-wrap: wrap; }
+.scrub { position: relative; flex: 1 1 200px; min-width: 160px; }
+.scrub input { width: 100%; accent-color: var(--red); margin: 0; }
+.scrub i { position: absolute; top: -5px; width: 4px; height: 10px; border-radius: 2px; background: var(--led); pointer-events: none; }
+.scrub i.shot { background: var(--red); height: 14px; top: -7px; }
+.scrub i.pass { background: #2f6fd6; }
+.dotkey { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: middle; flex: none; }
+.demo-side .star { color: #0a1220; }
+.mini { display: flex; gap: 8px; margin: 10px 0 4px; }
+.mini div { flex: 1; background: #dde5f0; border-radius: 8px; padding: 6px 4px; text-align: center; }
+.mini b { display: block; font-family: var(--f-mono); font-size: 1.25rem; color: var(--blue); }
+.mini span { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; color: #5b6b7d; }
+.spark { width: 100%; margin-top: 6px; background: #0a1220; border-radius: 8px; cursor: pointer; display: block; }
+.reviewbtn { display: block; width: 100%; text-align: left; background: #fde3e6; color: #7e0a1d; border: 0; border-radius: 6px; padding: 6px 8px; margin-top: 5px; cursor: pointer; font: inherit; font-size: 0.88rem; }
+.reviewbtn:hover { background: #fbcfd5; }
+.lb { display: flex; align-items: center; gap: 4px; width: 100%; background: transparent; color: inherit; border: 0; border-bottom: 1px solid var(--line); padding: 8px 4px; cursor: pointer; font: inherit; text-align: left; }
+.lb:hover { background: rgba(255, 255, 255, 0.06); }
+.lb .nm { flex: 1; font-weight: 600; }
+.lb .g { font-family: var(--f-mono); color: var(--led); font-size: 1.2rem; }
+.lb .sc { width: 22px; text-align: right; color: var(--muted); font-size: 0.85rem; }
